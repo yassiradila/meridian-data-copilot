@@ -1,0 +1,72 @@
+name: Meridian CI / CD Pipeline
+
+# 1. Trigger the pipeline whenever someone pushes code or creates a Pull Request
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test-and-evaluate:
+    runs-on: ubuntu-latest
+
+    # 2. Spin up a temporary PostgreSQL test database in the cloud
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: stellantis_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      # 3. Download the code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 4. Install UV (Astral UV package manager)
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      # 5. Set up Python 3.11
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 6. Install dependencies
+      - name: Install Dependencies
+        run: |
+          uv sync
+
+      # 7. Seed PostgreSQL and Ingest PDFs
+      - name: Seed Database & Ingest Vector Knowledge Base
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/stellantis_db
+        run: |
+          uv run python scripts/load_excel_to_postgres.py || true
+          uv run python scripts/ingest_docs.py
+
+      # 8. Run Pytest Unit Tests
+      - name: Run Unit Tests (Security & Functions)
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/stellantis_db
+        run: |
+          uv run pytest tests/test_tools.py -v
+
+      # 9. Run the Benchmark Evaluation Suite (23 Questions)
+      - name: Run 23-Question AI Benchmark
+        env:
+          DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/stellantis_db
+        run: |
+          uv run python tests/eval_runner.py
