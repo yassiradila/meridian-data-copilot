@@ -70,3 +70,51 @@ jobs:
           DATABASE_URL: postgresql://postgres:testpassword@localhost:5432/stellantis_db
         run: |
           uv run python tests/eval_runner.py
+
+  # =========================================================================
+  # CONTINUOUS DEPLOYMENT (CD) - Azure Web App for Containers
+  # =========================================================================
+  deploy-to-azure:
+    name: Build Docker & Deploy to Azure Web App
+    needs: test-and-evaluate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to Azure Container Registry (ACR)
+        run: |
+          az acr login --name ${{ secrets.ACR_NAME }}
+
+      - name: Build and Push Docker Image to ACR
+        env:
+          ACR_NAME: ${{ secrets.ACR_NAME }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
+          IMAGE_NAME="${ACR_LOGIN_SERVER}/meridian-copilot"
+
+          echo "[Docker] Building image: ${IMAGE_NAME}:${IMAGE_TAG} and latest..."
+          docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -t ${IMAGE_NAME}:latest .
+
+          echo "[Docker] Pushing image to ACR..."
+          docker push ${IMAGE_NAME}:${IMAGE_TAG}
+          docker push ${IMAGE_NAME}:latest
+
+      - name: Deploy to Azure Web App for Containers
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          images: ${{ secrets.ACR_NAME }}.azurecr.io/meridian-copilot:${{ github.sha }}
+
+      - name: Azure Logout
+        if: always()
+        run: |
+          az logout || true
